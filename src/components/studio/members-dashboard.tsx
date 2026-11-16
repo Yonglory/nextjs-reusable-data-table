@@ -9,6 +9,7 @@ import type {
   SubRowStatus,
   TableStatus,
 } from "@/components/data-table/types";
+import { PageHeader } from "@/components/shell/page-header";
 import { formatIsoDate } from "@/lib/format";
 import {
   memberStatusRank,
@@ -24,7 +25,7 @@ const memberColumns: ColumnDef<Member>[] = [
     id: "name",
     header: "Member",
     accessor: (row) => row.name,
-    cell: (row) => <span className="font-medium">{row.name}</span>,
+    cell: (row) => <span className="font-medium text-zinc-900">{row.name}</span>,
     sortable: true,
     width: 220,
     pinned: true,
@@ -142,27 +143,20 @@ export function MembersDashboard() {
   }, [failChild]);
 
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="max-w-2xl">
-          <p className="text-sm font-medium text-accent">Directory</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Members
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-stone-600">
-            Same table, different columns. Sort and page size are sent to the API,
-            which returns one page of 500 members. Visits load the first time a
-            row opens.
-          </p>
-        </div>
-        <ScenarioControls
-          scenario={scenario}
-          onScenario={setScenario}
-          failChild={failChild}
-          onFailChild={setFailChild}
-          childLabel="Fail next visit fetch"
-        />
-      </div>
+    <section className="space-y-5">
+      <PageHeader
+        title="Members"
+        description="Same table, different columns. Sort and page size are sent to the API, which returns one page of 500 members. Visits load the first time a row opens."
+        actions={
+          <ScenarioControls
+            scenario={scenario}
+            onScenario={setScenario}
+            failChild={failChild}
+            onFailChild={setFailChild}
+            childLabel="Fail visit fetch"
+          />
+        }
+      />
 
       <DataTable
         columns={memberColumns}
@@ -191,9 +185,9 @@ export function MembersDashboard() {
           renderSubRows: ({ rows, status, error, retry }) => (
             <div>
               <div className="mb-3 flex items-baseline justify-between gap-3">
-                <h2 className="text-sm font-semibold text-stone-800">Recent visits</h2>
+                <h2 className="text-[13px] font-semibold text-zinc-900">Recent visits</h2>
                 {status === "ready" || status === "empty" ? (
-                  <p className="text-xs text-stone-500">
+                  <p className="text-xs text-zinc-500">
                     {rows.length === 1 ? "1 visit" : `${rows.length} visits`}
                   </p>
                 ) : null}

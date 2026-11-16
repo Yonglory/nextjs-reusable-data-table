@@ -146,11 +146,11 @@ function buildAttendees(
   return attendees;
 }
 
-function buildClasses(): StudioClass[] {
+function buildClasses(count: number): StudioClass[] {
   const random = createRng(20261115);
   const classes: StudioClass[] = [];
 
-  for (let index = 0; index < 240; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const id = `cls-${(index + 1).toString().padStart(3, "0")}`;
     const startMinutes = index === 0 ? 10 * 60 : 6 * 60 + (index % 14) * 60;
     const duration = index % 4 === 0 ? 45 : 60;
@@ -187,11 +187,35 @@ function buildClasses(): StudioClass[] {
   return classes;
 }
 
-const classes = buildClasses();
+export const DEFAULT_CLASS_COUNT = 240;
+export const LARGE_CLASS_COUNT = 10000;
+export const MAX_CLASS_COUNT = 20000;
 
-export function getClasses(includeAttendees: boolean): StudioClass[] {
-  if (includeAttendees) return classes;
-  return classes.map((studioClass) => {
+// The generator is deterministic and sequential, so the first 240 classes are the
+// same in every pool. Pools are built lazily and cached by size.
+const pools = new Map<number, StudioClass[]>();
+
+function getPool(count: number): StudioClass[] {
+  const cached = pools.get(count);
+  if (cached) return cached;
+  const pool = buildClasses(count);
+  pools.set(count, pool);
+  return pool;
+}
+
+/** Clamps a requested size into the supported range. */
+export function normalizeClassCount(value: number | null | undefined): number {
+  if (!value || !Number.isFinite(value)) return DEFAULT_CLASS_COUNT;
+  return Math.min(Math.max(Math.trunc(value), 1), MAX_CLASS_COUNT);
+}
+
+export function getClasses(
+  includeAttendees: boolean,
+  count: number = DEFAULT_CLASS_COUNT,
+): StudioClass[] {
+  const pool = getPool(count);
+  if (includeAttendees) return pool;
+  return pool.map((studioClass) => {
     const rest = { ...studioClass };
     delete rest.attendees;
     return rest;
@@ -199,7 +223,13 @@ export function getClasses(includeAttendees: boolean): StudioClass[] {
 }
 
 export function getAttendees(classId: string): Attendee[] | null {
-  const studioClass = classes.find((item) => item.id === classId);
-  if (!studioClass) return null;
+  // Ids look like "cls-007". Anything past the default set comes from the large pool.
+  const position = Number(classId.replace("cls-", ""));
+  if (!Number.isInteger(position) || position < 1 || position > MAX_CLASS_COUNT) {
+    return null;
+  }
+  const pool = getPool(position <= DEFAULT_CLASS_COUNT ? DEFAULT_CLASS_COUNT : LARGE_CLASS_COUNT);
+  const studioClass = pool[position - 1];
+  if (!studioClass || studioClass.id !== classId) return null;
   return studioClass.attendees ?? [];
 }

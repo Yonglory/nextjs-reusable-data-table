@@ -1,9 +1,14 @@
-import type { ColumnDef, SortState } from "./types";
+import type { ColumnDef, SortState, SortValue } from "./types";
 
-export function compareValues(
-  left: string | number | Date | null | undefined,
-  right: string | number | Date | null | undefined,
-): number {
+// One shared collator. `localeCompare` with options builds a new one on every call,
+// which is slow when sorting thousands of rows.
+const collator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+export function compareValues(left: SortValue, right: SortValue): number {
+  // Empty values always sort last, in both directions of the base comparison.
   if (left == null && right == null) return 0;
   if (left == null) return 1;
   if (right == null) return -1;
@@ -16,12 +21,10 @@ export function compareValues(
     return left - right;
   }
 
-  return String(left).localeCompare(String(right), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  return collator.compare(String(left), String(right));
 }
 
+/** Returns the sort only if it points at a sortable column and has a valid direction. */
 export function resolveSort<T>(
   columns: ColumnDef<T>[],
   sort: SortState,
@@ -33,6 +36,7 @@ export function resolveSort<T>(
   return sort;
 }
 
+/** Header click cycle: none -> asc -> desc -> none. */
 export function nextSort(current: SortState, columnId: string): SortState {
   if (!current || current.columnId !== columnId) {
     return { columnId, direction: "asc" };
@@ -43,20 +47,24 @@ export function nextSort(current: SortState, columnId: string): SortState {
   return null;
 }
 
+/**
+ * Sorts a copy of `rows`. The accessor runs once per row (not once per comparison),
+ * then a sorted list of row positions is used to build the result. For 10,000 rows
+ * that is 10,000 accessor calls instead of roughly 130,000.
+ */
 export function sortRows<T>(
   rows: readonly T[],
   columns: ColumnDef<T>[],
   sort: SortState,
 ): T[] {
   const resolved = resolveSort(columns, sort);
-  if (!resolved) return [...rows];
+  const accessor = columns.find((item) => item.id === resolved?.columnId)?.accessor;
+  if (!resolved || !accessor) return [...rows];
 
-  const column = columns.find((item) => item.id === resolved.columnId);
-  const accessor = column?.accessor;
-  if (!accessor) return [...rows];
-
+  const keys = rows.map(accessor);
   const direction = resolved.direction === "asc" ? 1 : -1;
-  return rows.toSorted(
-    (left, right) => compareValues(accessor(left), accessor(right)) * direction,
-  );
+  const order = Array.from(rows.keys());
+  // Array.prototype.sort is stable, so equal keys keep their original order.
+  order.sort((a, b) => compareValues(keys[a], keys[b]) * direction);
+  return order.map((index) => rows[index]);
 }

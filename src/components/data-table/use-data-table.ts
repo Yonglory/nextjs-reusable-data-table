@@ -1,6 +1,20 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+/**
+ * All table state lives here, so the components can stay purely presentational.
+ *
+ * Controlled vs uncontrolled (same idea as a React <input>):
+ * - Pass `sort` / `pagination` and the parent owns the value. The table only
+ *   reports changes through `onSortChange` / `onPaginationChange`.
+ * - Leave them out and the table keeps its own state, starting from
+ *   `defaultSort` / `defaultPagination`.
+ *
+ * Client vs server (independent of the above):
+ * - `manualSorting`: the table does not reorder `data`; the parent already did.
+ * - `manualPagination`: `data` is one page and `rowCount` is the full total.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clampPageIndex, getPageCount } from "./paginate";
 import { nextSort, resolveSort, sortRows } from "./sort";
 import type {
@@ -13,11 +27,9 @@ import type {
 
 const DEFAULT_PAGE_SIZE_OPTIONS = [10, 25, 50];
 
-type CacheEntry<TChild> = {
-  status: "loading" | "error" | "ready";
-  rows: TChild[];
-  error?: string;
-};
+type CacheEntry<TChild> =
+  | { status: "ready"; rows: TChild[] }
+  | { status: "error"; error: string };
 
 type UseDataTableArgs<T, TChild> = Pick<
   DataTableProps<T, TChild>,
@@ -57,40 +69,40 @@ export function useDataTable<T, TChild>({
   paginate = true,
   expandable,
 }: UseDataTableArgs<T, TChild>) {
-  const isSortControlled = sortProp !== undefined;
-  const isPaginationControlled = paginationProp !== undefined;
-  const [uncontrolledSort, setUncontrolledSort] = useState<SortState>(defaultSort);
-  const [uncontrolledPagination, setUncontrolledPagination] =
-    useState<PaginationState>(
-      defaultPagination ?? {
-        pageIndex: 0,
-        pageSize: pageSizeOptions[0] ?? 10,
-      },
-    );
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
-  const [cache, setCache] = useState<Map<string, CacheEntry<TChild>>>(
-    () => new Map(),
-  );
-  const requestsRef = useRef(new Map<string, number>());
+  const expandMode = expandable?.mode;
+  const loadSubRows = expandable?.loadSubRows;
+  const getSubRows = expandable?.getSubRows;
 
+  // ---- Sort -----------------------------------------------------------------
+  const isSortControlled = sortProp !== undefined;
+  const [uncontrolledSort, setUncontrolledSort] = useState<SortState>(defaultSort);
+  // An unknown column, a non-sortable column or a bad direction resolves to "no sort".
   const sort = resolveSort(
     columns,
     isSortControlled ? (sortProp ?? null) : uncontrolledSort,
   );
-  const rawPagination = isPaginationControlled
-    ? (paginationProp ?? uncontrolledPagination)
-    : uncontrolledPagination;
+
+  // ---- Pagination -----------------------------------------------------------
+  const isPaginationControlled = paginationProp !== undefined;
+  const [uncontrolledPagination, setUncontrolledPagination] =
+    useState<PaginationState>(
+      defaultPagination ?? { pageIndex: 0, pageSize: pageSizeOptions[0] ?? 10 },
+    );
+  const rawPagination = paginationProp ?? uncontrolledPagination;
   const pageSize =
     rawPagination.pageSize > 0
       ? rawPagination.pageSize
       : (pageSizeOptions[0] ?? 10);
 
+  // ---- Derived rows ---------------------------------------------------------
   const sortedRows = useMemo(
-    () => (manualSorting ? [...data] : sortRows(data, columns, sort)),
+    () => (manualSorting ? data : sortRows(data, columns, sort)),
     [columns, data, manualSorting, sort],
   );
 
   const total = manualPagination ? (rowCount ?? 0) : sortedRows.length;
+
+  // While loading, `total` is not trustworthy yet, so the page is not clamped.
   const canClamp = paginate && status === "ready";
   const pageIndex = canClamp
     ? clampPageIndex(rawPagination.pageIndex, pageSize, total)
@@ -113,14 +125,6 @@ export function useDataTable<T, TChild>({
     [pageIndex, pageSize],
   );
 
-  const rowById = useMemo(() => {
-    const map = new Map<string, T>();
-    for (const row of data) {
-      map.set(getRowId(row), row);
-    }
-    return map;
-  }, [data, getRowId]);
-
   const commitPagination = useCallback(
     (next: PaginationState) => {
       if (!isPaginationControlled) setUncontrolledPagination(next);
@@ -129,6 +133,15 @@ export function useDataTable<T, TChild>({
     [isPaginationControlled, onPaginationChange],
   );
 
+  // A controlled page that is out of range is shown clamped. Tell the parent too,
+  // otherwise its state would keep pointing at a page that does not exist.
+  const needsPageSync =
+    canClamp && isPaginationControlled && rawPagination.pageIndex !== pageIndex;
+  useEffect(() => {
+    if (needsPageSync) onPaginationChange?.({ pageIndex, pageSize });
+  }, [needsPageSync, onPaginationChange, pageIndex, pageSize]);
+
+  // ---- Sort and page actions ------------------------------------------------
   const toggleSort = useCallback(
     (columnId: string) => {
       const column = columns.find((item) => item.id === columnId);
@@ -136,8 +149,10 @@ export function useDataTable<T, TChild>({
       const next = resolveSort(columns, nextSort(sort, columnId));
       if (!isSortControlled) setUncontrolledSort(next);
       onSortChange?.(next);
+      // A new order makes the old offset meaningless. In manual mode the parent
+      // refetches, so it resets the page itself.
       if (paginate && !manualPagination) {
-        commitPagination({ ...pagination, pageIndex: 0 });
+        commitPagination({ pageIndex: 0, pageSize });
       }
     },
     [
@@ -146,8 +161,8 @@ export function useDataTable<T, TChild>({
       isSortControlled,
       manualPagination,
       onSortChange,
+      pageSize,
       paginate,
-      pagination,
       sort,
     ],
   );
@@ -155,117 +170,111 @@ export function useDataTable<T, TChild>({
   const setPageIndex = useCallback(
     (nextIndex: number) => {
       commitPagination({
-        pageIndex: clampPageIndex(nextIndex, pagination.pageSize, total),
-        pageSize: pagination.pageSize,
+        pageIndex: clampPageIndex(nextIndex, pageSize, total),
+        pageSize,
       });
     },
-    [commitPagination, pagination.pageSize, total],
+    [commitPagination, pageSize, total],
   );
 
   const setPageSize = useCallback(
     (nextSize: number) => {
       const size = nextSize > 0 ? nextSize : (pageSizeOptions[0] ?? 10);
       commitPagination({
-        pageIndex: clampPageIndex(pagination.pageIndex, size, total),
+        pageIndex: clampPageIndex(pageIndex, size, total),
         pageSize: size,
       });
     },
-    [commitPagination, pageSizeOptions, pagination.pageIndex, total],
+    [commitPagination, pageIndex, pageSizeOptions, total],
   );
 
-  const loadSubRows = useCallback(
+  // ---- Expansion ------------------------------------------------------------
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [cache, setCache] = useState<Map<string, CacheEntry<TChild>>>(
+    () => new Map(),
+  );
+  // Latest request number per row. A response is ignored unless it is the latest,
+  // so a slow old request can never overwrite a newer retry.
+  const requestsRef = useRef(new Map<string, number>());
+
+  // Stable identity, so memoised rows do not re-render when another row toggles.
+  const toggleRow = useCallback((rowId: string) => {
+    setExpandedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }, []);
+
+  const fetchSubRows = useCallback(
     (row: T) => {
-      const load = expandable?.loadSubRows;
-      if (!load) return;
+      if (!loadSubRows) return;
       const id = getRowId(row);
       const token = (requestsRef.current.get(id) ?? 0) + 1;
       requestsRef.current.set(id, token);
-      setCache((prev) => {
-        const next = new Map(prev);
-        next.set(id, { status: "loading", rows: [] });
-        return next;
-      });
+      const isLatest = () => requestsRef.current.get(id) === token;
 
-      load(row)
+      const store = (entry: CacheEntry<TChild>) =>
+        setCache((previous) => new Map(previous).set(id, entry));
+
+      loadSubRows(row)
         .then((rows) => {
-          if (requestsRef.current.get(id) !== token) return;
-          setCache((prev) => {
-            const next = new Map(prev);
-            next.set(id, { status: "ready", rows });
-            return next;
-          });
+          if (isLatest()) store({ status: "ready", rows });
         })
         .catch((error: unknown) => {
-          if (requestsRef.current.get(id) !== token) return;
+          if (!isLatest()) return;
           const message =
             error instanceof Error && error.message
               ? error.message
               : "Could not load rows.";
-          setCache((prev) => {
-            const next = new Map(prev);
-            next.set(id, { status: "error", rows: [], error: message });
-            return next;
-          });
+          store({ status: "error", error: message });
         });
     },
-    [expandable?.loadSubRows, getRowId],
+    [getRowId, loadSubRows],
   );
 
-  const toggleRow = useCallback(
-    (rowId: string) => {
-      const willOpen = !expandedIds.has(rowId);
-      setExpandedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(rowId)) next.delete(rowId);
-        else next.add(rowId);
+  // On-demand mode: start a fetch for every expanded row that has none yet.
+  // "No cache entry" is what the UI shows as loading, so no loading state is stored.
+  useEffect(() => {
+    if (expandMode !== "onDemand") return;
+    for (const row of pageRows) {
+      const id = getRowId(row);
+      if (!expandedIds.has(id) || cache.has(id)) continue;
+      if (requestsRef.current.has(id)) continue; // already in flight
+      fetchSubRows(row);
+    }
+  }, [cache, expandMode, expandedIds, fetchSubRows, getRowId, pageRows]);
+
+  const getSubRowContext = (row: T): SubRowRenderContext<T, TChild> => {
+    const id = getRowId(row);
+    const retry = () => {
+      setCache((previous) => {
+        const next = new Map(previous);
+        next.delete(id);
         return next;
       });
-      if (!willOpen || expandable?.mode !== "onDemand") return;
-      if (cache.has(rowId)) return;
-      const row = rowById.get(rowId);
-      if (row) loadSubRows(row);
-    },
-    [cache, expandable?.mode, expandedIds, loadSubRows, rowById],
-  );
+      fetchSubRows(row);
+    };
 
-  const retrySubRows = useCallback(
-    (row: T) => {
-      loadSubRows(row);
-    },
-    [loadSubRows],
-  );
+    if (expandMode !== "onDemand") {
+      const rows = getSubRows?.(row) ?? [];
+      const subStatus: SubRowStatus = rows.length === 0 ? "empty" : "ready";
+      return { parent: row, rows, status: subStatus, retry };
+    }
 
-  const getSubRowContext = useCallback(
-    (row: T): SubRowRenderContext<T, TChild> => {
-      const retry = () => retrySubRows(row);
-      if (expandable?.mode !== "onDemand") {
-        const rows = expandable?.getSubRows?.(row) ?? [];
-        const subStatus: SubRowStatus = rows.length === 0 ? "empty" : "ready";
-        return { parent: row, rows, status: subStatus, retry };
-      }
-
-      const entry = cache.get(getRowId(row));
-      if (!entry || entry.status === "loading") {
-        return { parent: row, rows: [], status: "loading", retry };
-      }
-      if (entry.status === "error") {
-        return {
-          parent: row,
-          rows: [],
-          status: "error",
-          error: entry.error,
-          retry,
-        };
-      }
-      return {
-        parent: row,
-        rows: entry.rows,
-        status: entry.rows.length === 0 ? "empty" : "ready",
-        retry,
-      };
-    },
-    [cache, expandable, getRowId, retrySubRows],
-  );
+    const entry = cache.get(id);
+    if (!entry) return { parent: row, rows: [], status: "loading", retry };
+    if (entry.status === "error") {
+      return { parent: row, rows: [], status: "error", error: entry.error, retry };
+    }
+    return {
+      parent: row,
+      rows: entry.rows,
+      status: entry.rows.length === 0 ? "empty" : "ready",
+      retry,
+    };
+  };
 
   return {
     pageRows,

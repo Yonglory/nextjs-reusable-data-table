@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f6f4f1;
-  --foreground: #1c1917;
+  --background: #fafafa; /* zinc-50 */
+  --foreground: #18181b; /* zinc-900 */
   --surface: #ffffff;
-  --accent: #1f6b4a;
-  --line: #e7e5e4;
+  --accent: #4f46e5; /* indigo-600 */
+  --line: #e4e4e7; /* zinc-200 */
 }
 
 @theme inline {
@@ -22,4 +22,51 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* One focus style for every interactive control. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * Data table helpers.
+ *
+ * The scroll hook toggles `data-scrolled` on the scroller. These rules turn that
+ * attribute into a shadow on the last pinned column, so scrolling never causes
+ * a React re-render. Each scroller resets the variable, so a nested table is not
+ * affected by its parent's scroll position.
+ */
+.dt-scroller {
+  --dt-pin-shadow: none;
+}
+
+.dt-scroller[data-scrolled] {
+  --dt-pin-shadow: 6px 0 8px -6px rgb(0 0 0 / 0.18);
+}
+
+.dt-pin-edge {
+  border-right: 1px solid var(--line);
+  box-shadow: var(--dt-pin-shadow);
+}
+
+/* Short fade when the row order changes. Opacity only, so it stays on the GPU. */
+@keyframes dt-fade-in {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dt-fade-in {
+  animation: dt-fade-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-fade-in {
+    animation: none;
+  }
 }

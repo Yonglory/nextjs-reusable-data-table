@@ -1,61 +1,49 @@
 "use client";
 
-export type Scenario = "ready" | "slow" | "error" | "empty";
+import { SegmentedControl } from "./segmented-control";
 
-const scenarios: Array<{ id: Scenario; label: string }> = [
-  { id: "ready", label: "Normal" },
-  { id: "slow", label: "Slow" },
-  { id: "error", label: "Error" },
-  { id: "empty", label: "Empty" },
+export type Scenario = "ready" | "slow" | "error" | "empty" | "large";
+
+const BASE_OPTIONS: Array<{ value: Scenario; label: string }> = [
+  { value: "ready", label: "Normal" },
+  { value: "slow", label: "Slow" },
+  { value: "error", label: "Error" },
+  { value: "empty", label: "Empty" },
 ];
 
+const LARGE_OPTION = { value: "large" as const, label: "10k rows" };
+
+/** Demo-only controls that let a reviewer trigger each table state on demand. */
 export function ScenarioControls({
   scenario,
   onScenario,
+  includeLarge = false,
   failChild,
   onFailChild,
-  childLabel = "Fail next child fetch",
+  childLabel = "Fail child fetch",
 }: {
   scenario: Scenario;
   onScenario: (scenario: Scenario) => void;
+  includeLarge?: boolean;
   failChild?: boolean;
   onFailChild?: (fail: boolean) => void;
   childLabel?: string;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div
-        role="radiogroup"
-        aria-label="Load scenario"
-        className="flex flex-wrap gap-1 rounded-full bg-stone-100 p-1"
-      >
-        {scenarios.map((item) => {
-          const selected = scenario === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => onScenario(item.id)}
-              className={`rounded-full px-3 py-1.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-                selected
-                  ? "bg-surface font-medium text-foreground shadow-sm"
-                  : "text-stone-600 hover:text-foreground"
-              }`}
-            >
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <SegmentedControl
+        label="Load scenario"
+        value={scenario}
+        options={includeLarge ? [...BASE_OPTIONS, LARGE_OPTION] : BASE_OPTIONS}
+        onChange={onScenario}
+      />
       {onFailChild ? (
-        <label className="flex items-center gap-2 text-sm text-stone-600">
+        <label className="flex items-center gap-2 text-[13px] text-zinc-600">
           <input
             type="checkbox"
             checked={failChild}
             onChange={(event) => onFailChild(event.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 rounded accent-accent"
           />
           {childLabel}
         </label>
