@@ -2,18 +2,28 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { DataTable } from "@/components/data-table/data-table";
-import type { ColumnDef, SubRowStatus, TableStatus } from "@/components/data-table/types";
+import type {
+  ColumnDef,
+  SubRowStatus,
+  TableStatus,
+} from "@/components/data-table/types";
+import { PageHeader } from "@/components/shell/page-header";
 import {
+  LARGE_CLASS_COUNT,
   classStatusRank,
   type Attendee,
   type StudioClass,
 } from "@/lib/mock/classes";
+import { AttendanceMeter } from "./attendance-meter";
 import { ScenarioControls, type Scenario } from "./scenario-controls";
+import { SegmentedControl } from "./segmented-control";
 import { StatusBadge } from "./status-badge";
 import { useMockList } from "./use-mock-list";
 
 type ExpansionMode = "inline" | "onDemand";
 
+// Column definitions are declared once, outside the component, so their identity
+// is stable and the table never has to recompute its layout.
 const classColumns: ColumnDef<StudioClass>[] = [
   {
     id: "name",
@@ -21,14 +31,14 @@ const classColumns: ColumnDef<StudioClass>[] = [
     accessor: (row) => row.name,
     cell: (row) => (
       <div className="min-w-0">
-        <p className="truncate font-medium">{row.name}</p>
-        <p className="truncate text-xs text-stone-500">
+        <p className="truncate font-medium text-zinc-900">{row.name}</p>
+        <p className="truncate text-xs text-zinc-500">
           {row.day} · {row.room}
         </p>
       </div>
     ),
     sortable: true,
-    width: 230,
+    width: 240,
     pinned: true,
   },
   {
@@ -50,9 +60,9 @@ const classColumns: ColumnDef<StudioClass>[] = [
     id: "attendance",
     header: "Attendance",
     accessor: (row) => row.booked,
-    cell: (row) => `${row.booked} / ${row.capacity}`,
+    cell: (row) => <AttendanceMeter booked={row.booked} capacity={row.capacity} />,
     sortable: true,
-    width: 140,
+    width: 170,
     align: "right",
   },
   {
@@ -61,7 +71,7 @@ const classColumns: ColumnDef<StudioClass>[] = [
     accessor: (row) => classStatusRank[row.status],
     cell: (row) => <StatusBadge value={row.status} />,
     sortable: true,
-    width: 150,
+    width: 140,
   },
 ];
 
@@ -92,19 +102,14 @@ const attendeeColumns: ColumnDef<Attendee>[] = [
   },
 ];
 
-function getClassId(row: StudioClass) {
-  return row.id;
-}
+// Stable function references, so memoised rows are not invalidated by new closures.
+const getClassId = (row: StudioClass) => row.id;
+const getAttendeeId = (row: Attendee) => row.id;
+const getClassLabel = (row: StudioClass) => row.name;
+const getInlineAttendees = (row: StudioClass) => row.attendees ?? [];
 
-function getAttendeeId(row: Attendee) {
-  return row.id;
-}
-
-function getClassLabel(row: StudioClass) {
-  return row.name;
-}
-
-function childStatus(status: SubRowStatus): TableStatus {
+/** Maps the child fetch state onto the table's own loading / error / ready states. */
+function childTableStatus(status: SubRowStatus): TableStatus {
   if (status === "loading") return "loading";
   if (status === "error") return "error";
   return "ready";
@@ -115,88 +120,66 @@ export function TimetableDashboard() {
   const [scenario, setScenario] = useState<Scenario>("ready");
   const [failChild, setFailChild] = useState(false);
 
+  // 10k rows would make an inline payload huge, so that scenario always loads on demand.
+  const effectiveMode: ExpansionMode = scenario === "large" ? "onDemand" : mode;
+
   const url = useMemo(() => {
     const params = new URLSearchParams();
-    if (mode === "onDemand") params.set("includeAttendees", "0");
+    if (effectiveMode === "onDemand") params.set("includeAttendees", "0");
+    if (scenario === "large") params.set("size", String(LARGE_CLASS_COUNT));
     if (scenario === "slow") params.set("latency", "1800");
     if (scenario === "error") params.set("fail", "1");
     if (scenario === "empty") params.set("empty", "1");
     const query = params.toString();
     return query ? `/api/classes?${query}` : "/api/classes";
-  }, [mode, scenario]);
+  }, [effectiveMode, scenario]);
 
   const list = useMockList<StudioClass>(url);
 
-  const loadAttendees = useCallback(async (row: StudioClass) => {
-    const params = new URLSearchParams();
-    if (failChild) params.set("fail", "1");
-    const query = params.toString();
-    const response = await fetch(
-      `/api/classes/${row.id}/attendees${query ? `?${query}` : ""}`,
-      { cache: "no-store" },
-    );
-    const body = (await response.json()) as { data?: Attendee[]; error?: string };
-    if (!response.ok) {
-      throw new Error(body.error || "Could not load attendees.");
-    }
-    return body.data ?? [];
-  }, [failChild]);
+  const loadAttendees = useCallback(
+    async (row: StudioClass) => {
+      const query = failChild ? "?fail=1" : "";
+      const response = await fetch(`/api/classes/${row.id}/attendees${query}`, {
+        cache: "no-store",
+      });
+      const body = (await response.json()) as { data?: Attendee[]; error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Could not load attendees.");
+      }
+      return body.data ?? [];
+    },
+    [failChild],
+  );
 
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="max-w-2xl">
-          <p className="text-sm font-medium text-accent">Weekly schedule</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Class timetable
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-stone-600">
-            Sort and page the full roster in the browser. Expand a class to see who
-            is booked — either from the payload, or from a separate request.
-          </p>
-        </div>
-        <ScenarioControls
-          scenario={scenario}
-          onScenario={setScenario}
-          failChild={failChild}
-          onFailChild={setFailChild}
-          childLabel="Fail next attendee fetch"
-        />
-      </div>
+    <section className="space-y-5">
+      <PageHeader
+        title="Class timetable"
+        description="Sort and page the full roster in the browser. Expand a class to see who is booked, either from the payload or from a separate request."
+        actions={
+          <ScenarioControls
+            scenario={scenario}
+            onScenario={setScenario}
+            includeLarge
+            failChild={failChild}
+            onFailChild={setFailChild}
+            childLabel="Fail attendee fetch"
+          />
+        }
+      />
 
-      <div
-        role="radiogroup"
-        aria-label="Attendee loading"
-        className="flex w-fit flex-wrap gap-1 rounded-full border border-line bg-surface p-1"
-      >
-        {(
-          [
-            ["inline", "Inline attendees"],
-            ["onDemand", "Load on expand"],
-          ] as const
-        ).map(([value, label]) => {
-          const selected = mode === value;
-          return (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => setMode(value)}
-              className={`rounded-full px-3 py-1.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-                selected
-                  ? "bg-accent font-medium text-white"
-                  : "text-stone-600 hover:text-foreground"
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedControl
+        label="Attendee loading"
+        value={effectiveMode}
+        onChange={setMode}
+        options={[
+          { value: "inline", label: "Inline attendees", disabled: scenario === "large" },
+          { value: "onDemand", label: "Load on expand" },
+        ]}
+      />
 
       <DataTable
-        key={mode}
+        key={effectiveMode}
         columns={classColumns}
         data={list.rows}
         getRowId={getClassId}
@@ -209,22 +192,22 @@ export function TimetableDashboard() {
         ariaLabel="Class timetable"
         defaultSort={{ columnId: "time", direction: "asc" }}
         expandable={{
-          mode,
-          getSubRows: (row) => row.attendees ?? [],
+          mode: effectiveMode,
+          getSubRows: getInlineAttendees,
           loadSubRows: loadAttendees,
           renderSubRows: ({ rows, status, error, retry }) => (
             <div>
               <div className="mb-3 flex items-baseline justify-between gap-3">
-                <h2 className="text-sm font-semibold text-stone-800">Attendees</h2>
+                <h2 className="text-[13px] font-semibold text-zinc-900">Attendees</h2>
                 {status === "ready" || status === "empty" ? (
-                  <p className="text-xs text-stone-500">{rows.length} booked</p>
+                  <p className="text-xs text-zinc-500">{rows.length} booked</p>
                 ) : null}
               </div>
               <DataTable
                 columns={attendeeColumns}
                 data={status === "ready" || status === "empty" ? rows : []}
                 getRowId={getAttendeeId}
-                status={childStatus(status)}
+                status={childTableStatus(status)}
                 errorMessage={error}
                 onRetry={retry}
                 emptyTitle="No attendees booked"

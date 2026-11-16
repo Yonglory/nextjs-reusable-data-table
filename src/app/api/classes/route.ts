@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import type { NextRequest } from "next/server";
-import { getClasses } from "@/lib/mock/classes";
+import { getClasses, normalizeClassCount } from "@/lib/mock/classes";
 import { delay, readLatency } from "@/lib/mock/delay";
 
 export async function GET(request: NextRequest) {
@@ -16,7 +16,8 @@ export async function GET(request: NextRequest) {
   }
 
   const includeAttendees = params.get("includeAttendees") !== "0";
-  const data = params.get("empty") === "1" ? [] : getClasses(includeAttendees);
+  const count = normalizeClassCount(Number(params.get("size")));
+  const data = params.get("empty") === "1" ? [] : getClasses(includeAttendees, count);
 
   return Response.json(
     { data },
